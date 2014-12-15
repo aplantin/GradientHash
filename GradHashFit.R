@@ -43,14 +43,14 @@ hashText <- function(x, type=c("textfile","textstring"), num.mem,tuple){
     }
     words <- c(words, tups)  
   }
-  words <- sapply(words, function(x){ murmur3.32(x) %% num.mem })
+  words <- sapply(words, function(x){ murmur3.32(x) %% num.mem } + 1)
   return(words)
 }
 
 # Hash categories of high-dimensional categorical variable
 hashCategories <- function(x, num.mem){
   library(hashFunction)
-  cats <- sapply(x, function(y){ murmur3.32(y) %% num.mem })
+  cats <- sapply(x, function(y){ murmur3.32(y) %% num.mem } + 1)
   return(cats)
 }
 
@@ -184,16 +184,16 @@ fitFromParams <- function(params, types, datalist, p, n){
       thisX <- as.numeric(datalist[[i]])
       thisbeta <- as.numeric(params[[i]])
       for (j in 1:n){ 
-        yhat[j] <- yhat[j] + thisbeta[thisX[j]+1]
+        yhat[j] <- thisbeta[thisX[j]]
       }
     } else if (thistype=="linear"){
       thisX <- as.numeric(datalist[[i]])
       thisbeta <- as.numeric(params[[i]])
-      yhat <- yhat + thisX * thisbeta 
+      yhat <- thisX * thisbeta 
     } else if (thistype=="smooth"){
       thisX <- as.numeric(datalist[[i]])
       thisbeta <- as.numeric(params[[i]])
-      yhat <- yhat + thisbeta 
+      yhat <- thisbeta 
     } else if (thistype=="textfile" | thistype=="textstring"){
       thisX <- datalist[[i]]
       thisbeta <- as.numeric(params[[i]])
@@ -201,7 +201,7 @@ fitFromParams <- function(params, types, datalist, p, n){
         nwords <- length(thisX[[j]])
         for (k in c(1:nwords)){
           thishash <- thisX[[j]][k]
-          yhat[j] <- yhat[j] + thisbeta[thishash+1]
+          yhat[j] <- thisbeta[thishash]
         }
       }
     }
@@ -236,12 +236,12 @@ hashFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","linear")
     if (family == "binomial") { resids <- y - expit(yhat) }
     
     gradient <- calcGradient(datalist, n.mem.vec, resids, types)
-    params.new <- takeStep(params, gradient, datalist, types, resids, 
-                           sthlambda, smoothlambda, step.size)
+    params.new <- takeStep(params, gradient, datalist, types, resids, sthlambda, smoothlambda, step.size)
     yhat <- fitFromParams(params.new, types, datalist, p, n)
     coef.change <- calcDiff(params, params.new)
     count <- count + 1
     params <- params.new 
+    print(sum(yhat-y)^2)
   }
   return(yhat)
 }

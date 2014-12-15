@@ -7,7 +7,7 @@ test.cat <- sample(c("cat","dog","fish","turtle","iguana","horse",
 hashed.cat <- hashCategories(test.cat, 15) 
 test.text <- c() 
 for (i in formatC(c(1:100), width = 3, format = "d", flag = "0")){
-  test.text <- c(test.text, paste("txt_data/text",i,".txt", sep=""))
+  test.text <- c(test.text, paste("../txt_data/text",i,".txt", sep=""))
 }
 test.smooth <- rnorm(100,0,1)
 test.df <- data.frame(test.cat, test.text, test.smooth)
@@ -37,9 +37,9 @@ calcGradient(hash.data,c(15,1000,NA),y,c("category","textfile","smooth"))
 
 
 ##### Test Fit with Category & Textfile ##### 
-test.df <- test.df <- data.frame(test.cat, test.text)
-hash.data <- data.prep(test.df, c("category","textfile"), c(15,1000), tuples=FALSE)
-y <- y.cat + y.txt + err
-hashFit(hash.data, c("category","textfile"), y, c(15,1000,NA), family="linear",
-        sthlambda=0.1, smoothlambda=1, thresh=1e-3, maxit=1e3, step.size=0.0001)
+test.df <- test.df <- data.frame(test.cat)
+hash.data <- data.prep(test.df, c("category"), c(15))
+y <- y.cat
+fitted <- hashFit(hash.data, c("category"), y, c(15), family="linear",
+        sthlambda=1, smoothlambda=0.1, thresh=1e-3, maxit=1e3, step.size=0.01)
 
