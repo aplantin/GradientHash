@@ -203,7 +203,7 @@ takeStep <- function(params, gradient, data, thistype, resids, sthlambda, smooth
 
 ##### Model Fitting ##### 
 hashFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian"), sthlambda, 
-                    smoothlambda, thresh=1e-4, maxit=1e3, adaptive=FALSE, step.size=0.00001){
+                    smoothlambda, thresh=1e-4, maxit=1e3){
   p <- length(types)
   n <- length(y)
   yhat <- rep(0, n)
@@ -211,166 +211,39 @@ hashFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian
   eta.new <- matrix(0, nrow=n, ncol=p)
   
   params <- initialize.params(types, n.mem.vec, p, n)
-  if (adaptive == TRUE) { step <- rep(1, p) } else { step <- rep(step.size, p) }
+  params.new <- params 
+  step <- rep(1, p)
   
   count <- 0 
   coef.change <- thresh + 1 
+  yhat <- apply(eta, 1, sum)
   
   while((coef.change > thresh) & (count < maxit)){
     coef.change <- 0 
-    yhat <- apply(eta, 1, sum)
     for(j in 1:p){
       if (family == "gaussian") { resids <- y - yhat }
       if (family == "binomial") { resids <- y - expit(yhat) }
       this.type <- types[j]
-      this.step <- step[j]
       this.grad <- calcGradient(datalist[[j]], n.mem.vec[j], resids, this.type)    
       params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, 
-                                  sthlambda, smoothlambda, this.step)   ## Just update this variable's params
+                                  sthlambda, smoothlambda, step[j])   ## Just update this variable's params
       eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]])
-      yhat <- yhat - eta[,j] + eta.new[,j]
+      yhat.new <- yhat - eta[,j] + eta.new[,j]
+      while( sum((y-yhat.new)^2) > (sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) - 
+                                      1/(2*step.size) * sum((params.new[[j]] - params[[j]])^2)) ){
+        step[j] <- step[j] * 0.8 
+        params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, 
+                                    sthlambda, smoothlambda, step[j])   ## Just update this variable's params
+        eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]])
+        yhat.new <- yhat - eta[,j] + eta.new[,j]
+      }
       coef.change <- coef.change + sum(abs(params.new[[j]] - params[[j]]))
+      yhat <- yhat.new 
+      eta <- eta.new 
+      params[[j]] <- params.new[[j]] 
     }
     count <- count + 1
-    params <- params.new 
-    eta <- eta.new 
   }
   return(list(yhat, params, coef.change, count))
 }
-
-##### Cross Validation ##### 
-# Credit: Noah Simon
-
-# Get folds for cross validation. 
-selectFolds <- function(n, nfolds){
-  perFold <- n/nfolds
-  reorder <- sample(1:n, replace=FALSE)
-  folds <- list()
-  last <- 1
-  for (i in 1:nfolds){
-    folds[[i]] <- reorder[last:(last + perFold - 1)]
-    last <- last + perFold
-  }
-  return(folds)
-}
-
-lambdas <- function(X, Z, y, family=c("binomial","linear"), n.sth.lam=11, n.sm.lam=11, n, I, M, N){
-  # Soft thresholding lambdas
-  xty <- rep(0,M)
-  if (family == "binomial") {
-    for (j in 1:n) {
-      for (i in 1:I) {
-        m = sum(N[1:i] + X[j,i])
-        xty[m] <- xty[m] + (y[m] - 1/2)
-      }
-    }
-    zty <- t(Z) %*% (y - 1/2) 
-  }
-  if (family == "linear") {
-    for (j in 1:n) {
-      for (i in 1:I) {
-        m = sum(N[1:i]) + X[j,i]
-        xty[m] <- xty[m] + y[m]
-      }
-    }
-    zty <- t(Z) %*% y 
-  }
-  
-  max.sth.lambda <- max(abs(c(xty, zty)), na.rm=TRUE)
-  sth.lambdas <- rev(exp(seq(log(0.1), log(max.sth.lambda), length.out=n.sth.lam)))
-  
-  # Smoothing splines lambdas
-  sm.lambdas <- exp(seq(-5,5,length.out=n.sm.lam))
-  
-  # Matrix of lambdas
-  sm.col <- as.numeric(sapply(sm.lambdas, function(x) rep(x, length(sth.lambdas))))
-  sth.col <- rep(sth.lambdas, length(sm.lambdas))
-  alllambdas <- cbind("smooth"=sm.col, "sth"=sth.col)
-  return(alllambdas)
-}
-
-testOneFold <- function(X, Z, y, thisfold, all.lambdas, family=c("binomial","linear"), 
-                        thresh=1e-3, maxit=1e3, step.size=0.001) {
-  # training and test sets 
-  train.X <- as.matrix(X[-thisfold,])
-  test.X <- as.matrix(X[thisfold,])
-  train.Z <- as.matrix(Z[-thisfold,])
-  test.Z <- as.matrix(Z[thisfold,])
-  train.y <- y[thisfold]
-  train.n <- length(train.y)
-  test.n <- n - train.n
-  orig.beta <- beta
-  
-  # fit model for each lambda pair on this fold 
-  n.lam <- length(all.lambdas[,1])
-  res <- as.list(rep(NA, n.lam))
-  old.sm.lam <- 0
-  test.eta <- matrix(nrow = n, ncol=n.lam)
-  for (l in 1:n.lam) tryCatch( {
-    sm.lam <- all.lambdas[l,1]
-    sth.lam <- all.lambdas[l,2]
-    if (sm.lam != old.sm.lam) {
-      if (!is.null(orig.beta)) {
-        beta <- orig.beta
-      } else {
-        beta <- rep(0,M)
-      }
-    }  # Use the updated beta within the same smoothing lambda
-    res[[l]] <- modelfit(train.X, train.Z, train.y, sth.lam, sm.lam, family)
-    
-    beta <- res[[l]]$beta
-    old.sm.lam <- sm.lam
-    print(paste("Done with lambdas sth", sth.lam, "sm", sm.lam))
-    
-    # calculate fitted values on test data 
-    test.cat <- rep(0, test.n)
-    for (j in 1:test.n) { for (i in 1:I) {
-      m = sum(N[1:i]) + test.X[j,i]
-      test.cat[j] = test.cat[j] + res[[l]]$beta[m]
-    } }
-    test.spline <- matrix(nrow=test.n, ncol=G)
-    if (!is.matrix(train.Z)) {train.Z <- as.matrix(train.Z)}
-    for (g in 1:G) { # Linear interpolation 
-      test.spline[,g] <- approx( x = train.Z[,g], y = res[[l]]$theta[,g], xout=test.Z[,g], rule=2)$y
-    }
-    test.eta[,l] <- test.cat + apply(test.spline, 1, function(x) sum(x) )
-  }, error=function(e) {print(paste("Lambdas sth", sth.lam, "sm", sm.lam, "failed."))})
-  return(test.eta)
-}
-
-crossval <- function(X=NULL, Z=NULL, y, family=c("binomial", "linear"), nfolds=10, thresh=1e-3, maxit=1e3, beta=NULL, intercept=TRUE, adaptive=TRUE, step=0.001) {
-  # Variable set-up
-  vars <- varprep(X, Z, y, intercept)
-  X <- vars$X
-  Z <- vars$Z
-  y <- vars$y
-  n <- vars$n
-  I <- vars$I
-  N <- vars$N
-  M <- vars$M
-  G <- vars$G
-  
-  # Set up folds and lambda values to try  
-  folds <- selectFolds(n, nfolds)
-  all.lambdas <- lambdas(X, Z, y, family, n=n, N=N, I=I, M=M) 
-  
-  # Try each pair of lambdas on each fold; store fitted values of test set
-  all.test.etas <- matrix(0, nrow=1, ncol=length(all.lambdas[,1]))
-  for (i in 1:nfolds){
-    thisfold.eta <- testOneFold(X, Z, y, folds[[i]], all.lambdas, family, thresh, maxit, beta, intercept, adaptive, step, n, N, I, M, G)
-    all.test.etas <- rbind(all.test.etas, thisfold.eta)
-  }
-  losses <- apply(all.test.etas, 2, FUN = function(x) { loss(x, y, family) })
-  best.loss <- which.min(losses) 
-  best.lams <- all.lambdas[best.loss,]
-  return(best.lams)
-}
-
-make.plot <- function(fitted,true,name){
-  pdf(paste(name,".pdf",sep=""),w=6,h=6)
-  plot(true,fitted,xlab="true",ylab="fitted",main=name)
-  dev.off()
-}
-
-
 

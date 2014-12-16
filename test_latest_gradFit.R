@@ -1,5 +1,5 @@
 ## Test gradFit code 
-source("gradFit_withC.R")
+source("coordgrad_withC.R")
 
 ##### Make and Process Test Data ##### 
 
@@ -34,7 +34,5 @@ err <- rnorm(100, 0, 1)
 y <- y.cat + y.linear + y.smooth + y.txt + err
 
 ##### Test functions ##### 
-all.fit <- hashFit(hash.data, type, y, numMem, family="gaussian", sthlambda=0, smoothlambda=0.5, step.size=0.00001, maxit=1e5) 
+all.fit <- hashFit(hash.data, type, y, numMem, family="gaussian", sthlambda=2, smoothlambda=0.5, maxit=1e5) 
 plot(all.fit[[1]] ~ y)
-
-all.fit[[2]][1] # Categorical 
