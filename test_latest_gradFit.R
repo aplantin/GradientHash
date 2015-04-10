@@ -13,25 +13,112 @@ for (i in formatC(c(1:100), width=3, format="d", flag="0")){
 test.linear <- runif(100,0,1)
 test.smooth <- runif(100,0,6)
 
-### only categorical
+#### only categorical ##### 
 my.df <- data.frame(test.cat)
-numMem <- c(1000) 
+numMem <- c(500) 
 type <- c("category")
 hash.data <- data.prep(my.df, type, numMem)
 y.cat <- rep(0,100); y.cat[which(test.cat=="alpaca")] <- 3; y.cat[which(test.cat=="iguana")] <- 2
-all.fit <- hashFit(hash.data, type, y.cat, numMem, family="gaussian", sthlambda=0, smoothlambda=0, thresh=1e-6, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y.cat, numMem, family="gaussian", lambda=1, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
 plot(all.fit[[1]] ~ y.cat)
 
-### only linear 
+#### only linear #####
 my.df <- data.frame(test.linear)
 numMem <- c(NA) 
 type <- c("linear")
 hash.data <- data.prep(my.df, type, numMem)
 y.linear <- test.linear * 2 
-all.fit <- hashFit(hash.data, type, y.linear, numMem, family="gaussian", sthlambda=0, smoothlambda=1, thresh=1e-6, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y.linear, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
 plot(all.fit[[1]] ~ y.linear)
 
-##### All four variable types #####   
+#### only text ####
+my.df <- data.frame(test.text)
+numMem <- c(1000)
+type <- c("textfile")
+hash.data <- data.prep(my.df, type, numMem)
+y.text <- rep(0,100)
+for(i in 1:100){ 
+  this.txt <- hash.data[[1]][[1]][[i]]
+  y.txt[i] <- y.txt[i] + length(this.txt[this.txt < 200])  
+}
+all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", lambda=4, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y.smooth)
+
+#### only smooth ####
+my.df <- data.frame(test.smooth)
+numMem <- c(NA)
+type <- c("smooth")
+hash.data <- data.prep(my.df, type, numMem)
+y.smooth <- sin(test.smooth)
+all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", lambda=4, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y.smooth)
+
+#### linear and text #### 
+my.df <- data.frame(test.linear, test.text)
+numMem <- c(NA, 1000) 
+type <- c("linear", "textfile")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.linear + y.text
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y.linear)
+
+#### linear and categorical #### 
+my.df <- data.frame(test.linear, test.cat)
+numMem <- c(NA, 1000) 
+type <- c("linear", "category")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.linear + y.cat
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+#### linear and smooth #### 
+my.df <- data.frame(test.linear, test.smooth)
+numMem <- c(NA, NA) 
+type <- c("linear","smooth")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.linear + y.smooth
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+#### text and categorical #### 
+my.df <- data.frame(test.text, test.cat)
+numMem <- c(1000, 1000) 
+type <- c("textfile","category")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.text + y.cat 
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=10, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+#### text and smooth #### 
+my.df <- data.frame(test.text, test.smooth)
+numMem <- c(1000, NA) 
+type <- c("textfile","smooth")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.text + y.smooth
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+#### categorical and smooth #### 
+my.df <- data.frame(test.cat, test.smooth)
+numMem <- c(1000, NA) 
+type <- c("category","smooth")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.cat + y.smooth
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+#### everything but smooth #### 
+## recall order of alphas is (linear, smooth, categorical, text)
+my.df <- data.frame(test.linear, test.text, test.cat)
+numMem <- c(NA, 1000, 1000) 
+type <- c("linear","textfile","category")
+hash.data <- data.prep(my.df, type, numMem)
+y <- y.text + y.cat + y.linear
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=4, alphas=rep(0.25, 4), thresh=1e-6, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+
+#### All four variable types #####   
 my.df <- data.frame(test.cat, test.linear, test.text, test.smooth)
 numMem <- c(1000, NA, 1000, NA)
 type <- c("category", "linear", "textfile", "smooth")
@@ -41,7 +128,7 @@ hash.data <- data.prep(my.df, type, numMem)
 y.cat <- rep(0,100); y.cat[which(test.cat=="alpaca")] <- 3; y.cat[which(test.cat=="llama")] <- 2
 y.txt <- rep(0,100)
 for(i in 1:100){ 
-  this.txt <- hash.data[[3]][[i]]
+  this.txt <- hash.data[[1]][[3]][[i]]
   y.txt[i] <- y.txt[i] + length(this.txt[this.txt < 200])  
 }
 y.linear <- test.linear 
@@ -52,12 +139,7 @@ err <- rnorm(100, 0, 1)
 ##### Test functions #####
 ### Without error 
 y <- y.cat + y.linear + y.smooth + y.txt
-all.fit <- hashFit(hash.data, type, y, numMem, family="gaussian", sthlambda=0, smoothlambda=0.5, thresh=1e-5, maxit=1e7) 
-plot(all.fit[[1]] ~ y)
-
-### And with error 
-y <- y.cat + y.linear + y.smooth + y.txt + err
-all.fit <- hashFit(hash.data, type, y, numMem, family="gaussian", sthlambda=1, smoothlambda=0.5, thresh=1e-5, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=c(0.3, 0, 0.3, 0.4), thresh=1e-5, maxit=1e7) 
 plot(all.fit[[1]] ~ y)
 
 ##### Categorical time comparisons ##### 
@@ -67,7 +149,7 @@ test.time.cat <- function(cat.df, y.cat, mem){
   numMem <- c(mem) 
   type <- c("category")
   system.time(hash.data <- data.prep(my.df, type, numMem))
-  t <- system.time(all.fit <- hashFit(hash.data, type, y.cat, numMem, family="gaussian", sthlambda=0, 
+  t <- system.time(all.fit <- hashFit(hash.data, type, params=NULL, y.cat, numMem, family="gaussian", sthlambda=0, 
                                  smoothlambda=0, thresh=1e-6, maxit=1e7)) ## 26.45 seconds 
   b <- unique(all.fit$betas[[1]]) ## there was a conflict 
   c <- all.fit$count

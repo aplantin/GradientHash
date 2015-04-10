@@ -19,8 +19,8 @@ soft <- function(xvec, lambda){
 
 ##### Data Preparation ##### 
 
-# take a vector of filenames or strings and number of available memory locations 
-# and hash the text to those locations by word or tuple
+# input: single filename or string, # available memory locations 
+# hash the text to those locations by word or tuple
 hashText <- function(x, type=c("textfile","textstring"), num.mem, tuples){
   if (type == "textfile") {
     str <- paste(readLines(x))
@@ -41,10 +41,28 @@ hashText <- function(x, type=c("textfile","textstring"), num.mem, tuples){
   return(words)
 }
 
-# Hash categories of high-dimensional categorical variable
 hashCategories <- function(x, num.mem){
   cats <- sapply(x, function(y){ murmur3.32(y) %% num.mem })
-  return(cats)
+  thisidx <- sort(unique(cats)) + 1 
+  counts <- rep(0, num.mem)
+  counts[thisidx] <- table(cats)
+  return(list(cats, counts))
+}
+
+scaleLinear <- function(x){
+  this.var <- var(x)
+  rescale <- x/sqrt(this.var)
+  return(rescale)
+}
+
+countText <- function(x, numMem){
+  counts <- rep(0, numMem)
+  for(i in 1:length(x)){
+    thistab <- as.data.frame(table(x[[i]]))
+    thisidx <- sort(unique(x[[i]])) + 1  ## add 1 to index because hash values go from 0 to k-1 
+    counts[thisidx] <- counts[thisidx] + thistab$Freq
+  }
+  return(counts)
 }
 
 # take a data.frame (n x p) and a vector of types; output a list of lists 
@@ -55,32 +73,36 @@ hashCategories <- function(x, num.mem){
 data.prep <- function(dataframe, types, n.mem.vec, tuples=FALSE){
   p <- ncol(dataframe) 
   out <- vector("list", p)
+  counts <- vector("list", p)
   for (i in c(1:p)){
     thistype <- types[i]
     if (thistype == "category"){
-      out[[i]] <- sapply(dataframe[,i], FUN = function(x){hashCategories(as.character(x), n.mem.vec[i])})
-    } else if (thistype == "smooth" | thistype == "linear"){
-      out[[i]] <- dataframe[,i]
+      this.out <- hashCategories(as.character(dataframe[,i]), n.mem.vec[i])
+      out[[i]] <- this.out[[1]]
+      counts[[i]] <- this.out[[2]]
+    } else if (thistype == "linear" | thistype == "smooth"){
+      out[[i]] <- scaleLinear(dataframe[,i])
     } else if (thistype == "textfile" | thistype == "textstring"){
       out[[i]] <- sapply(dataframe[,i], FUN = function(x){hashText(as.character(x), thistype, n.mem.vec[i], tuples)})
+      counts[[i]] <- countText(out[[i]], n.mem.vec[i])
     } else { (out[[i]] <- "Not a recognized type")}
   }
-  return(out)
+  return(list(out, counts))
 }
 
 ##### Gradient Calculation ##### 
 # Categorical variables 
-cppFunction('NumericVector gradCat(IntegerVector hash, int mem, NumericVector res) {
+cppFunction('NumericVector gradCat(IntegerVector hash, int mem, IntegerVector count, NumericVector res) {
   int n = res.size(); 
   NumericVector out(mem); 
   for(int i = 0; i < n; ++i) {
-    out[hash[i]] += res[i]; 
+    out[hash[i]] += res[i]/sqrt(count[hash[i]]); 
   }
   return out; 
   }')
 
 # text variables (original input as either file or string) 
-gradText = cxxfunction(signature(x='List', Mem='integer', Res='numeric'), plugin='Rcpp', body = '
+gradText = cxxfunction(signature(x='List', Mem='integer', Count='integer', Res='numeric'), plugin='Rcpp', body = '
   Rcpp::List xlist(x);
   int mem = Rcpp::as<int>(Mem); 
   NumericVector out(mem); 
@@ -88,13 +110,14 @@ gradText = cxxfunction(signature(x='List', Mem='integer', Res='numeric'), plugin
     out[i] = 0; 
   }
   NumericVector res(Res); 
+  IntegerVector count(Count); 
   int n = res.size(); 
 
   for(int i = 0; i < n; i++){
     NumericVector ll = xlist[i];  
     int m = ll.size(); 
     for(int j=0; j < m; j++){
-      out[ll[j]] += res[i]; 
+      out[ll[j]] += res[i]/sqrt(count[ll[j]]); 
     }
   }
   return(Rcpp::wrap(out)); 
@@ -108,15 +131,15 @@ gradLin <- function(x, resids){
 }
 
 # Overall 
-calcGradient <- function(data, mem, resids, thistype){
+calcGradient <- function(data, mem, count, resids, thistype){
   if (thistype=="category"){
-    gradient <- gradCat(data, mem, resids)
+    gradient <- gradCat(data, mem, count, resids)
   } else if (thistype=="linear"){
     gradient <- gradLin(data, resids)
   } else if (thistype=="smooth"){
     gradient <- resids 
   } else if (thistype=="textfile" | thistype=="textstring"){
-    gradient <- gradText(data, mem, resids)
+    gradient <- gradText(data, mem, count, resids)
   } 
   return(gradient)
 }
@@ -138,47 +161,49 @@ initialize.params <- function(types,n.mem.vec,p,n){
   return(params)
 }
 
-cppFunction('NumericVector fitCat(IntegerVector hash, NumericVector beta, NumericVector y) {
+cppFunction('NumericVector fitCat(IntegerVector hash, NumericVector beta, IntegerVector count, NumericVector y) {
   int n = y.size(); 
   for(int i = 0; i < n; ++i) {
-    y[i] += beta[hash[i]];
+    y[i] += beta[hash[i]]/sqrt(count[hash[i]]);
   }
   return y; 
   }')
 
-fitText = cxxfunction(signature(x='List', B='numeric', Y='numeric'), plugin='Rcpp', body = '
+fitText = cxxfunction(signature(x='List', Beta='numeric', Count='int', Y='numeric'), plugin='Rcpp', body = '
   Rcpp::List xlist(x);
   NumericVector y(Y); 
-  NumericVector b(B); 
+  IntegerVector count(Count); 
+  NumericVector beta(Beta); 
   int n = y.size(); 
   for(int i = 0; i < n; i++){
     NumericVector ll = xlist[i];  
     int m = ll.size(); 
     for(int j=0; j < m; j++){
-      y[i] += b[ll[j]]; 
+      y[i] += beta[ll[j]]/sqrt(count[ll[j]]); 
     }
   }
   return(Rcpp::wrap(y)); 
   ')
 
-fitFromParams <- function(thisbeta, thistype, thisX){
+
+fitFromParams <- function(thisbeta, thistype, thisX, count){
   zero <- rep(0, length(thisX))
-  if (thistype=="category"){ fitted <- fitCat(thisX, thisbeta, zero)
+  if (thistype=="category"){ fitted <- fitCat(thisX, thisbeta, count, zero)
   } else if (thistype=="linear"){ fitted <- c(thisX) * thisbeta 
   } else if (thistype=="smooth"){ fitted <- thisbeta 
   } else if (thistype=="textfile" | thistype=="textstring"){
-    fitted <- fitText(thisX, thisbeta, zero)
+    fitted <- fitText(thisX, thisbeta, count, zero)
   }
   return(fitted)
 }
 
-takeStep <- function(params, gradient, data, thistype, resids, sthlambda, smoothlambda, step.size){
+takeStep <- function(params, gradient, data, thistype, resids, thislambda, step.size){
   n <- length(resids)
   # "beta_{j+1}" 
   if (thistype=="category" | thistype=="textfile" | thistype=="textstring"){
-    params.new <- soft(params + step.size * gradient, sthlambda*step.size/2)
+    params.new <- soft(params + step.size * gradient, thislambda*step.size/2)
   } else if (thistype=="linear"){
-    params.new <- params + step.size * gradient
+    params.new <- soft(params + step.size * gradient, thislambda*step.size/2)
   } else if (thistype=="smooth"){
     perm <- order(data)
     invperm <- order(perm)
@@ -188,23 +213,31 @@ takeStep <- function(params, gradient, data, thistype, resids, sthlambda, smooth
     # smoothing spline call
     if(!is.loaded("callSS_Fortran")) { dyn.load("Fit.so") }
     junk <- .C("callSS_Fortran", y = as.double(resids.ord), x = as.double(ord.dat), 
-               sy = as.double(out.step), lambda = as.double(smoothlambda), n_point = as.integer(n))
+               sy = as.double(out.step), lambda = as.double(thislambda), n_point = as.integer(n))
     params.new <- params + step.size * junk$sy[invperm]
   } 
   return(params.new)
 }
 
 ##### Model Fitting ##### 
-hashFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian"), sthlambda, 
-                    smoothlambda, thresh=1e-3, maxit=1e3){
+## alphas in order (linear, smooth, categorical, text)
+hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("binomial","gaussian"), lambda, alphas, thresh=1e-5, maxit=1e6){
+  datalist <- dataprep.obj[[1]] 
+  datacount <- dataprep.obj[[2]]
+  
+  lambda.dt <- data.table(type=c("linear","smooth","category","textfile", "textstring"), lam=lambda * c(alphas, alphas[4]))
+  setkey(lambda.dt, type)
+  
   p <- length(types)
   n <- length(y)
   yhat <- rep(0, n)
   eta <- matrix(0, nrow=n, ncol=p)
   eta.new <- matrix(0, nrow=n, ncol=p)
   
-  params <- initialize.params(types, n.mem.vec, p, n)
-  params.new <- params 
+  if(is.null(params)){
+    params <- initialize.params(types, n.mem.vec, p, n)
+  } 
+  params.new <- initialize.params(types, n.mem.vec, p, n)
   step <- rep(1, p)
   
   count <- 0 
@@ -217,17 +250,16 @@ hashFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian
       if (family == "gaussian") { resids <- y - yhat }
       if (family == "binomial") { resids <- y - expit(yhat) }
       this.type <- types[j]
-      this.grad <- calcGradient(datalist[[j]], n.mem.vec[j], resids, this.type)    
-      params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, 
-                                  sthlambda, smoothlambda, step[j])   ## Just update this variable's params
-      eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]])
+      this.grad <- calcGradient(datalist[[j]], n.mem.vec[j], datacount[[j]], resids, this.type)    
+      params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
+      eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
       yhat.new <- yhat - eta[,j] + eta.new[,j]
       while( 0.5 * sum((y-yhat.new)^2) > 0.5 * (sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) - 
-                                      0.5 * (1/step.size) * sum((params.new[[j]] - params[[j]])^2)) ){
+                                      0.5 * (1/step[j]) * sum((params.new[[j]] - params[[j]])^2)) ){
         step[j] <- step[j] * 0.8 
         params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, 
-                                    sthlambda, smoothlambda, step[j])   ## Just update this variable's params
-        eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]])
+                                    lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
+        eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
         yhat.new <- yhat - eta[,j] + eta.new[,j]
       }
       coef.change <- coef.change + sum(abs(params.new[[j]] - params[[j]]))
@@ -255,7 +287,9 @@ getFolds <- function(n, nfolds){
 }
 
 ## need to come up with appropriate lambda ranges 
-calcLams <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian")){
+calcLams <- function(dataprep.obj, types, alphas, y, n.mem.vec, family=c("binomial","gaussian")){
+  datalist <- dataprep.obj[[1]]
+  datacounts <- dataprep.obj[[2]]
   maxlamlin <- max()
 }
 
