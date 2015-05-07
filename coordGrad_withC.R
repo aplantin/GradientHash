@@ -128,7 +128,7 @@ calcGradient <- function(data, mem, count, resids, thistype){
   if (thistype=="category"){
     gradient <- gradCat(data, mem, count, resids)
   } else if (thistype=="linear"){
-    gradient <- t(x) %*% resids 
+    gradient <- t(data) %*% resids 
   } else if (thistype=="smooth"){
     gradient <- resids 
   } else if (thistype=="textfile" | thistype=="textstring"){
@@ -191,7 +191,7 @@ fitFromParams <- function(thisbeta, thistype, thisX, count){
 }
 
 takeStep <- function(params, gradient, data, thistype, thislambda, step.size){
-  n <- length(resids)
+  n <- length(data)
   # "beta_{j+1}" 
   if (thistype=="category" | thistype=="textfile" | thistype=="textstring"){
     params.new <- soft(params + step.size * gradient, thislambda*step.size)
