@@ -1,57 +1,126 @@
 ## Test gradFit code 
 source("coordgrad_withC.R")
 
-##### Test Data: Yelp ##### 
 
-### X-vectors 
-set.seed(13)
-test.cat <- sample(c("cat","dog","fish","turtle","iguana","horse","parrot","macaw","rabbit","alpaca","llama"),100,replace=TRUE)
+#### only text ####
+## all 0 when lambda = 1700, alpha = 0.25 
 test.text <- c() 
 for (i in formatC(c(1:100), width=3, format="d", flag="0")){
   test.text <- c(test.text, paste("txt_data/text",i,".txt", sep=""))
 }
-test.linear <- runif(100,0,1)
-test.smooth <- runif(100,0,6)
-
-#### only categorical ##### 
-my.df <- data.frame(test.cat)
-numMem <- c(500) 
-type <- c("category")
-hash.data <- data.prep(my.df, type, numMem)
-y.cat <- rep(0,100); y.cat[which(test.cat=="alpaca")] <- 3; y.cat[which(test.cat=="iguana")] <- 2
-all.fit <- hashFit(hash.data, type, params=NULL, y.cat, numMem, family="gaussian", lambda=1, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
-plot(all.fit[[1]] ~ y.cat)
-
-#### only linear #####
-my.df <- data.frame(test.linear)
-numMem <- c(NA) 
-type <- c("linear")
-hash.data <- data.prep(my.df, type, numMem)
-y.linear <- test.linear * 2 
-all.fit <- hashFit(hash.data, type, params=NULL, y.linear, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
-plot(all.fit[[1]] ~ y.linear)
-
-#### only text ####
 my.df <- data.frame(test.text)
-numMem <- c(1000)
+numMem <- c(2000)
 type <- c("textfile")
 hash.data <- data.prep(my.df, type, numMem)
 y.text <- rep(0,100)
 for(i in 1:100){ 
   this.txt <- hash.data[[1]][[1]][[i]]
-  y.txt[i] <- y.txt[i] + length(this.txt[this.txt < 200])  
+  y.text[i] <- y.text[i] + length(this.txt[this.txt < 200])  
 }
-all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", lambda=4, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
-plot(all.fit[[1]] ~ y.smooth)
+all.fit <- hashFit(hash.data, type, params=NULL, y.text, numMem, family="gaussian", lambda=10, 
+                   alphas=rep(1,4), thresh=1e-6, maxit=10000, fixed=TRUE, step.size=0.001) 
+plot(all.fit[[1]] ~ y.text)
+
+## with majorization 
+all.fit <- hashFit(hash.data, type, params=NULL, y.text, numMem, family="gaussian", lambda=10, 
+                   alphas=rep(0.25,4), thresh=1e-6, maxit=1000) 
+plot(all.fit[[1]] ~ y.text)
+
+## warm start 
+warm.fit <- warmstart(hash.data, type, params=NULL, y.text, numMem, 
+                      family="gaussian", minLam=4, maxLam=450, nLam=75, alphas=rep(1,4), 
+                      thresh=1e-5, maxit=1e6)
+plot(warm.fit[[1]] ~ y.text)
+
+
+
+
+
+#### only categorical ##### 
+## lambda=45, alpha = 0.25 ==> all betas = 0 
+test.cat <- sample(c("cat","dog","fish","turtle","iguana","horse","parrot","macaw","rabbit","alpaca","llama"),100,replace=TRUE)
+my.df <- data.frame(test.cat)
+numMem <- c(500) 
+type <- c("category")
+hash.data <- data.prep(my.df, type, numMem)
+y.cat <- rep(0,100); y.cat[which(test.cat=="alpaca")] <- 3; y.cat[which(test.cat=="iguana")] <- 2
+all.fit <- hashFit(hash.data, type, params=NULL, y.cat, numMem, family="gaussian", lambda=0.5, 
+                   alphas=rep(1,4), thresh=1e-6, maxit=1000, fixed=TRUE, step.size=0.001) 
+plot(all.fit[[1]] ~ y.cat) 
+
+## with majorization 
+all.fit <- hashFit(hash.data, type, params=NULL, y.cat, numMem, family="gaussian", lambda=0.5, 
+                   alphas=rep(1,4), thresh=1e-6, maxit=1000) 
+plot(all.fit[[1]] ~ y.cat) 
+
+## with warm start 
+warm.fit <- warmstart(hash.data, type, params=NULL, y.cat, numMem, 
+                      family="gaussian", minLam=0.1, maxLam=10, nLam=50, alphas=rep(1,4), 
+                      thresh=1e-5, maxit=1e6)
+plot(warm.fit[[1]] ~ y.cat)
+
+
+
+
+
+
+#### only linear #####
+## lambda = 4 (alpha = 1) ==> all betas = 0 
+test.linear <- rnorm(100,0,2)
+my.df <- data.frame(test.linear)
+numMem <- c(NA) 
+type <- c("linear")
+hash.data <- data.prep(my.df, type, numMem)
+y.linear <- test.linear * 2
+y.linear <- y.linear / sd(y.linear)
+all.fit <- hashFit(hash.data, type, params=NULL, y.linear, numMem, family="gaussian", 
+                   lambda=1, alphas=rep(1,4), thresh=1e-5, maxit=10000, fixed=TRUE, step.size=0.01) 
+plot(all.fit[[1]] ~ y.linear) 
+
+## with majorization --- all betas = 0 at about lambda = 8  
+all.fit <- hashFit(hash.data, type, params=NULL, y.linear, numMem, family="gaussian", 
+                   lambda=1, alphas=rep(1,4), thresh=1e-5, maxit=10000) 
+plot(all.fit[[1]] ~ y.linear) 
+
+## with warm start 
+warm.fit <- warmstart(hash.data, type, params=NULL, y.linear, numMem, 
+                      family="gaussian", minLam=0.1, maxLam=10, nLam=50, alphas=rep(1,4), 
+                      thresh=1e-5, maxit=1e6)
+plot(warm.fit[[1]] ~ y.linear)
+
+
+
+
+
 
 #### only smooth ####
+## lambda = 150, alpha = 0.25 => completely flat.
+test.smooth <- runif(100,0,6)
 my.df <- data.frame(test.smooth)
 numMem <- c(NA)
 type <- c("smooth")
 hash.data <- data.prep(my.df, type, numMem)
 y.smooth <- sin(test.smooth)
-all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", lambda=4, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
-plot(all.fit[[1]] ~ y.smooth)
+all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", 
+                   lambda=3, alphas=rep(1,4), thresh=1e-6, maxit=1e7, fixed=TRUE, step.size=0.01) 
+plot(all.fit[[1]] ~ test.smooth)
+
+## with majorization 
+all.fit <- hashFit(hash.data, type, params=NULL, y.smooth, numMem, family="gaussian", 
+                   lambda=3, alphas=rep(1,4), thresh=1e-5, maxit=10000) 
+plot(all.fit[[1]] ~ test.smooth) 
+
+## with warm start 
+warm.fit <- warmstart(hash.data, type, params=NULL, y.smooth, numMem, 
+                      family="gaussian", minLam=3, maxLam=50, nLam=100, alphas=rep(1,4), 
+                      thresh=1e-5, maxit=1e6)
+plot(warm.fit[[1]] ~ test.smooth)
+
+
+
+
+
+
 
 #### linear and text #### 
 my.df <- data.frame(test.linear, test.text)
@@ -60,7 +129,7 @@ type <- c("linear", "textfile")
 hash.data <- data.prep(my.df, type, numMem)
 y <- y.linear + y.text
 all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
-plot(all.fit[[1]] ~ y.linear)
+plot(all.fit[[1]] ~ y)
 
 #### linear and categorical #### 
 my.df <- data.frame(test.linear, test.cat)
@@ -68,7 +137,8 @@ numMem <- c(NA, 1000)
 type <- c("linear", "category")
 hash.data <- data.prep(my.df, type, numMem)
 y <- y.linear + y.cat
-all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", 
+                   lambda=2, alphas=rep(0.25,4), thresh=1e-6, maxit=1e7, fixed=TRUE, step.size=0.001) 
 plot(all.fit[[1]] ~ y)
 
 #### linear and smooth #### 
@@ -114,7 +184,7 @@ numMem <- c(NA, 1000, 1000)
 type <- c("linear","textfile","category")
 hash.data <- data.prep(my.df, type, numMem)
 y <- y.text + y.cat + y.linear
-all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=4, alphas=rep(0.25, 4), thresh=1e-6, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=rep(0.25, 4), thresh=1e-6, maxit=1e7) 
 plot(all.fit[[1]] ~ y)
 
 

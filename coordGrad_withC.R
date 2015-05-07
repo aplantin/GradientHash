@@ -1,10 +1,9 @@
-## Last Update: 12.14.14
-
 ### Install and load required packages 
 library(stringi)
 library(hashFunction)
 library(Rcpp)
 library(inline)
+library(data.table)
 
 ##### Miscellaneous Support Functions ##### 
 # For binomial family calculations
@@ -19,9 +18,9 @@ soft <- function(xvec, lambda){
 
 ##### Data Preparation ##### 
 
-# input: single filename or string, # available memory locations 
+# **input: single filename or string, # available memory locations 
 # hash the text to those locations by word or tuple
-hashText <- function(x, type=c("textfile","textstring"), num.mem, tuples){
+hashText <- function(x, type=c("textfile","textstring"), num.mem, tuples){  
   if (type == "textfile") {
     str <- paste(readLines(x))
   } else { str <- x }
@@ -37,7 +36,7 @@ hashText <- function(x, type=c("textfile","textstring"), num.mem, tuples){
     }
     words <- c(words, tups)  
   }
-  words <- sapply(words, function(x){ murmur3.32(x) %% num.mem })
+  words <- sapply(words, function(x){ murmur3.32(x) %% num.mem}) ## hash is indexed from 0 
   return(words)
 }
 
@@ -59,8 +58,8 @@ countText <- function(x, numMem){
   counts <- rep(0, numMem)
   for(i in 1:length(x)){
     thistab <- as.data.frame(table(x[[i]]))
-    thisidx <- sort(unique(x[[i]])) + 1  ## add 1 to index because hash values go from 0 to k-1 
-    counts[thisidx] <- counts[thisidx] + thistab$Freq
+    thisidx <- sort(unique(x[[i]]))  
+    counts[thisidx + 1] <- counts[thisidx + 1] + thistab$Freq
   }
   return(counts)
 }
@@ -99,7 +98,8 @@ cppFunction('NumericVector gradCat(IntegerVector hash, int mem, IntegerVector co
     out[hash[i]] += res[i]/sqrt(count[hash[i]]); 
   }
   return out; 
-  }')
+  }
+  ')
 
 # text variables (original input as either file or string) 
 gradText = cxxfunction(signature(x='List', Mem='integer', Count='integer', Res='numeric'), plugin='Rcpp', body = '
@@ -123,19 +123,12 @@ gradText = cxxfunction(signature(x='List', Mem='integer', Count='integer', Res='
   return(Rcpp::wrap(out)); 
   ')
 
-# linear variables 
-gradLin <- function(x, resids){ 
-  x <- as.numeric(x)
-  gradient.linear <- t(x) %*% resids  
-  return(gradient.linear) 
-}
-
 # Overall 
 calcGradient <- function(data, mem, count, resids, thistype){
   if (thistype=="category"){
     gradient <- gradCat(data, mem, count, resids)
   } else if (thistype=="linear"){
-    gradient <- gradLin(data, resids)
+    gradient <- t(x) %*% resids 
   } else if (thistype=="smooth"){
     gradient <- resids 
   } else if (thistype=="textfile" | thistype=="textstring"){
@@ -197,35 +190,36 @@ fitFromParams <- function(thisbeta, thistype, thisX, count){
   return(fitted)
 }
 
-takeStep <- function(params, gradient, data, thistype, resids, thislambda, step.size){
+takeStep <- function(params, gradient, data, thistype, thislambda, step.size){
   n <- length(resids)
   # "beta_{j+1}" 
   if (thistype=="category" | thistype=="textfile" | thistype=="textstring"){
-    params.new <- soft(params + step.size * gradient, thislambda*step.size/2)
+    params.new <- soft(params + step.size * gradient, thislambda*step.size)
   } else if (thistype=="linear"){
-    params.new <- soft(params + step.size * gradient, thislambda*step.size/2)
+    params.new <- soft(params + step.size * gradient, thislambda*step.size)
   } else if (thistype=="smooth"){
     perm <- order(data)
     invperm <- order(perm)
     ord.dat <- data[perm]
-    resids.ord <- resids[perm]
+    resids.ord <- gradient[perm]
     out.step <- rep(0,n)
     # smoothing spline call
     if(!is.loaded("callSS_Fortran")) { dyn.load("Fit.so") }
-    junk <- .C("callSS_Fortran", y = as.double(resids.ord), x = as.double(ord.dat), 
-               sy = as.double(out.step), lambda = as.double(thislambda), n_point = as.integer(n))
-    params.new <- params + step.size * junk$sy[invperm]
+    junk <- .C("callSS_Fortran", y = as.double(resids.ord*step.size + params[perm]), x = as.double(ord.dat), 
+               sy = as.double(out.step), lambda = as.double(step.size*thislambda), n_point = as.integer(n))
+    params.new <- junk$sy[invperm]
   } 
   return(params.new)
 }
 
 ##### Model Fitting ##### 
 ## alphas in order (linear, smooth, categorical, text)
-hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("binomial","gaussian"), lambda, alphas, thresh=1e-5, maxit=1e6){
+hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("binomial","gaussian"), 
+                    lambda, alphas, thresh=1e-5, maxit=1e6, fixed=FALSE, step.size=1){
   datalist <- dataprep.obj[[1]] 
   datacount <- dataprep.obj[[2]]
   
-  lambda.dt <- data.table(type=c("linear","smooth","category","textfile", "textstring"), lam=lambda * c(alphas, alphas[4]))
+  lambda.dt <- data.table(type=c("linear","smooth","category","textfile", "textstring"), lam=lambda*c(alphas, alphas[4]))
   setkey(lambda.dt, type)
   
   p <- length(types)
@@ -238,7 +232,8 @@ hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("bi
     params <- initialize.params(types, n.mem.vec, p, n)
   } 
   params.new <- initialize.params(types, n.mem.vec, p, n)
-  step <- rep(1, p)
+  if(length(step.size) != p){ step <- rep(step.size,p) } else{ step <- step.size }  
+  ### note that if 1 < k < p step sizes are input, this will do some sort of weird vector-filling thing 
   
   count <- 0 
   coef.change <- thresh + 1 
@@ -247,20 +242,20 @@ hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("bi
   while(all(coef.change > thresh, count < maxit)){
     coef.change = 0 
     for(j in 1:p){
-      if (family == "gaussian") { resids <- y - yhat }
-      if (family == "binomial") { resids <- y - expit(yhat) }
+      resids <- y - yhat
       this.type <- types[j]
       this.grad <- calcGradient(datalist[[j]], n.mem.vec[j], datacount[[j]], resids, this.type)    
-      params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
+      params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
       eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
       yhat.new <- yhat - eta[,j] + eta.new[,j]
-      while( 0.5 * sum((y-yhat.new)^2) > 0.5 * (sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) - 
-                                      0.5 * (1/step[j]) * sum((params.new[[j]] - params[[j]])^2)) ){
-        step[j] <- step[j] * 0.8 
-        params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, resids, 
-                                    lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
-        eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
-        yhat.new <- yhat - eta[,j] + eta.new[,j]
+      if(fixed==FALSE){
+        while( 0.5*sum((y-yhat.new)^2) > (0.5*sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) + 
+                (1/(2*step[j])) * sum((params.new[[j]] - params[[j]])^2)) ){
+          step[j] <- step[j] * 0.8 
+          params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
+          eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
+          yhat.new <- yhat - eta[,j] + eta.new[,j]
+        }
       }
       coef.change <- coef.change + sum(abs(params.new[[j]] - params[[j]]))
       yhat <- yhat.new 
@@ -272,81 +267,16 @@ hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("bi
   return(list("fitted"=yhat, "betas"=params, "delta"=coef.change, "count"=count, "step"=step))
 }
 
-##### Cross-validation ##### 
-## Based on code from Noah Simon ## 
-getFolds <- function(n, nfolds){
-  perFold <- n/nfolds
-  reorder <- sample(1:n, replace=FALSE)
-  folds <- list() 
-  last <- 1 
-  for(i in 1:nfolds){
-    folds[[i]] <- reorder[last:(last+perFold-1)]
-    last <- last + perFold
-  }
-  return(folds)
-}
 
-## need to come up with appropriate lambda ranges 
-calcLams <- function(dataprep.obj, types, alphas, y, n.mem.vec, family=c("binomial","gaussian")){
-  datalist <- dataprep.obj[[1]]
-  datacounts <- dataprep.obj[[2]]
-  maxlamlin <- max()
-}
-
-lamMat <- function(sthlam, smoothlam){
-  expand.grid(sthlam, smoothlam)
-}
-
-multiFit <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian"), 
-                    thresh, maxit, lams){ 
-  n <- length(y)
-  nlams <- nrow(lams)
-  nparams = 0 
-  for(i in 1:length(types)){
-    if(types[i]=="linear"){nparams <- nparams + 1}
-    if(types[i]=="smooth"){nparams <- nparams + n}
-    if(types[i]=="textfile" | types[i]=="textstring" | types[i]=="category"){nparams <- nparams + n.mem.vec[i]}
+warmstart <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, 
+                      family=c("binomial","gaussian"), minLam, maxLam, nLam, 
+                      alphas, thresh=1e-5, maxit=1e6, fixed=FALSE, step.size=1){
+  lambdas <- exp( seq(log(minLam), log(maxLam), length.out=nLam) )
+  oldbeta <- hashFit(dataprep.obj, types, params, y, n.mem.vec, family, maxLam, alphas, thresh, maxit, fixed, step.size)$betas
+  for(i in (length(lambdas)-1)){
+    new.fit <- hashFit(dataprep.obj, types, params=oldbeta, y, n.mem.vec, family, 
+                       rev(lambdas)[i+1], alphas, thresh=1e-5, maxit=1e6, fixed, step.size)
+    oldbeta <- new.fit$betas 
   }
-  fits <- matrix(0, ncol=nlams, nrow=nparams) ## number of betas
-  for(i in 1:nlams){
-    fits[,i] <- hashFit(hash.data, type, y.txt, numMem, family="gaussian", sthlambda=lams[i,1], 
-                        smoothlambda=lams[i,2], thresh=1e-5, maxit=1e7)$betas
-  }
-  return(fits)
-}
-
-predictFromParams <- function(testdat, betas, types, n.mem.vec){
-  last=1
-  n <- nrow(testdat)
-  fitted = rep(0, nrow(testdat)) 
-  for(i in 1:length(types)){
-    this.x <- testdat[[i]]
-    this.type <- types[i]
-    if(this.type=="linear"){
-      this.beta <- betas[last]
-      last <- last + 1 
-    } else if(this.type=="smooth"){
-      this.beta <- betas[last:(last+n-1)]
-      last <- last + n
-    } else if(this.type=="textfile" | this.type=="category" | this.type=="textstring"){
-      this.beta <- betas[last:(last+n.mem.vec[i]-1)] 
-      last <- last + n.mem.vec[i]
-    }
-    fitted <- fitted + fitFromParams(this.beta, this.type, this.x)
-  }
-  return(fitted)
-}
-
-crossVal <- function(datalist, types, y, n.mem.vec, family=c("binomial","gaussian"), 
-                     thresh=1e-3, maxit=1e3, sthlams, smoothlams, nfolds){
-  folds <- getFolds(length(y), nfolds)
-  lambdas <- lamMat(sthlams, smoothlams)
-  y.pred <- matrix(0, nrow=length(y), ncol=nrow(lamMat))
-  for(i in 1:nfold){
-    dat.train <- lapply(datalist, FUN=function(x) x[-folds[[i]]])
-    dat.test <- lapply(datalist, FUN=function(x) x[folds[[i]]])
-    y.train <- y[-folds[[i]]]
-    fits <- multiFit(dat.train, types, y.train, n.mem.vec, family, thresh, maxit, lams=lambdas)
-    y.pred[folds[[i]],] <- fits
-  }
+  return(new.fit)
 }
