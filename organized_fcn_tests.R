@@ -9,14 +9,14 @@ for (i in formatC(c(1:100), width=3, format="d", flag="0")){
   test.text <- c(test.text, paste("txt_data/text",i,".txt", sep=""))
 }
 test.cat <- sample(c("cat","dog","fish","turtle","iguana","horse","parrot","macaw","rabbit","alpaca","llama"),100,replace=TRUE)
-test.linear <- rnorm(100,0,2)
+test.linear <- rnorm(100,10,2)
 test.smooth <- runif(100,-3,3)
-
 
 ## Y-variables 
 y.text <- rep(0,100)
+hash.data <- data.prep(data.frame(test.text), c("textfile"), c(2000))
 for(i in 1:100){ 
-  this.txt <- hash.data[[1]][[1]][[i]]  ## from only hashing a text variable
+  this.txt <- hash.data[[1]][[2]][[i]]  ## from only hashing a text variable
   y.text[i] <- y.text[i] + length(this.txt[this.txt < 200])  
 }
 y.text <- y.text / sd(y.text)
@@ -24,7 +24,7 @@ y.text <- y.text / sd(y.text)
 y.cat <- rep(0,100); y.cat[which(test.cat=="alpaca")] <- 3; y.cat[which(test.cat=="iguana")] <- 2
 y.cat <- y.cat/sd(y.cat)
 
-y.linear <- test.linear * 2
+y.linear <- test.linear * 2 + 5
 y.linear <- y.linear / sd(y.linear)
 
 y.smooth <- sin(test.smooth)
@@ -36,13 +36,13 @@ y.smooth <- y.smooth / sd(y.smooth)
 ## text 
 d <- data.frame(test.text); t <- c("textfile"); m <- c(2000)
 y <- y.text
-lam <- 1
+lam <- 0.5
 alph <- rep(1,4)
 
 ## categorical
 d <- data.frame(test.cat); t <- c("category"); m <- c(500)
 y <- y.cat
-lam <- 0.5
+lam <- 2
 alph <- rep(1,4)
 
 ## linear
@@ -54,7 +54,7 @@ alph <- rep(1,4)
 ## smooth 
 d <- data.frame(test.smooth); t <- c("smooth"); m <- c(NA)
 y <- y.smooth
-lam <- 5
+lam <- 0.1
 alph <- rep(1,4)
 
 #### two-variable models #### 
@@ -76,12 +76,12 @@ alph <- c(1,1,1,2)
 d <- data.frame(test.text, test.smooth); t <- c("textfile","smooth"); m <- c(2000,NA)
 y <- y.text+y.smooth
 lam <- 1
-alph <- c(1,0.1,1,1)
+alph <- c(1,0.5,1,1)
 
 ## Category, Linear
 d <- data.frame(test.cat, test.linear); t <- c("category","linear"); m <- c(500,NA)
 y <- y.cat + y.linear
-lam <- 110
+lam <- 0.5
 alph <- c(1,1,1,1)
 
 ## Category, Smooth 
@@ -101,8 +101,8 @@ d <- data.frame(test.linear, test.smooth, test.cat, test.text)
 t <- c("linear","smooth","category","textfile")
 m <- c(NA,NA,500,2000)
 y <- y.linear + y.smooth + y.cat + y.text
-lam <- 0.5
-alph <- c(1,1,0,1)
+lam <- 1
+alph <- c(1,1,1,1)
 
 ## text, linear, smooth
 d <- data.frame(test.linear, test.smooth, test.text)
@@ -146,15 +146,14 @@ d <- data.frame(test.linear, test.smooth, test.cat, test.text, test.linear2, tes
 t <- c("linear","smooth","category","textfile", "linear","category","smooth")
 m <- c(NA,NA,500,2000,NA,100,NA)
 y <- y.linear + y.smooth + y.cat + y.text + y.linear2 + y.cat2 + y.smooth2
-lam <- 2
+lam <- 3
 alph <- c(1,1,1,1)
 
 ##### Code for running each test ##### 
 hd <- data.prep(d, t, m, tuples=F)
-system.time(all.fit <- hashFit(hd, t, params=NULL, y, m, family="gaussian", lambda=lam, alphas=alph))
+system.time(all.fit <- hashFit(hd, params=NULL, y, family="gaussian", lambda=lam, alphas=alph))
 all.fit$step; all.fit$count
 plot(all.fit[[1]] ~ y)
-
 
 
 

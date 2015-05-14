@@ -69,24 +69,28 @@ countText <- function(x, numMem){
 ## family = c("binomial","gaussian") 
 ## n.mem.vec = p-vector of number of memory locations (NAs ok for linear/smooth vars)
 
-data.prep <- function(dataframe, types, n.mem.vec, tuples=FALSE){
+data.prep <- function(dataframe, types, n.mem.vec, tuples=FALSE, intercept=TRUE){
   p <- ncol(dataframe) 
-  out <- vector("list", p)
-  counts <- vector("list", p)
+  n <- nrow(dataframe)
+  out <- vector("list", (p+1))
+  counts <- vector("list", (p+1))
+  out[[1]] <- rep(1, n)
   for (i in c(1:p)){
     thistype <- types[i]
     if (thistype == "category"){
       this.out <- hashCategories(as.character(dataframe[,i]), n.mem.vec[i])
-      out[[i]] <- this.out[[1]]
-      counts[[i]] <- this.out[[2]]
+      out[[i+1]] <- this.out[[1]]
+      counts[[i+1]] <- this.out[[2]]
     } else if (thistype == "linear" | thistype == "smooth"){
-      out[[i]] <- scaleLinear(dataframe[,i])
+      out[[i+1]] <- scaleLinear(dataframe[,i])
     } else if (thistype == "textfile" | thistype == "textstring"){
-      out[[i]] <- sapply(dataframe[,i], FUN = function(x){hashText(as.character(x), thistype, n.mem.vec[i], tuples)})
-      counts[[i]] <- countText(out[[i]], n.mem.vec[i])
+      out[[i+1]] <- sapply(dataframe[,i], FUN = function(x){hashText(as.character(x), thistype, n.mem.vec[i], tuples)})
+      counts[[i+1]] <- countText(out[[i+1]], n.mem.vec[i])
     } else { (out[[i]] <- "Not a recognized type")}
   }
-  return(list(out, counts))
+  nMem <- c(NA, n.mem.vec)
+  type <- c("intercept",types)
+  return(list(out, counts, type, nMem))
 }
 
 ##### Gradient Calculation ##### 
@@ -127,7 +131,7 @@ gradText = cxxfunction(signature(x='List', Mem='integer', Count='integer', Res='
 calcGradient <- function(data, mem, count, resids, thistype){
   if (thistype=="category"){
     gradient <- gradCat(data, mem, count, resids)
-  } else if (thistype=="linear"){
+  } else if (thistype=="linear" | thistype=="intercept"){
     gradient <- t(data) %*% resids 
   } else if (thistype=="smooth"){
     gradient <- resids 
@@ -146,6 +150,8 @@ initialize.params <- function(types,n.mem.vec,p,n){
     if (thistype=="category" | thistype=="textfile" | thistype=="textstring"){
       params[[i]] <- rep(0, n.mem.vec[i])
     } else if (thistype=="linear"){
+      params[[i]] <- 0
+    } else if (thistype=="intercept"){
       params[[i]] <- 0
     } else if (thistype=="smooth"){
       params[[i]] <- rep(0,n)
@@ -182,7 +188,7 @@ fitText = cxxfunction(signature(x='List', Beta='numeric', Count='int', Y='numeri
 fitFromParams <- function(thisbeta, thistype, thisX, count){
   zero <- rep(0, length(thisX))
   if (thistype=="category"){ fitted <- fitCat(thisX, thisbeta, count, zero)
-  } else if (thistype=="linear"){ fitted <- c(thisX) * thisbeta 
+  } else if (thistype=="linear" | thistype=="intercept"){ fitted <- c(thisX) * thisbeta 
   } else if (thistype=="smooth"){ fitted <- thisbeta 
   } else if (thistype=="textfile" | thistype=="textstring"){
     fitted <- fitText(thisX, thisbeta, count, zero)
@@ -195,7 +201,7 @@ takeStep <- function(params, gradient, data, thistype, thislambda, step.size){
   # "beta_{j+1}" 
   if (thistype=="category" | thistype=="textfile" | thistype=="textstring"){
     params.new <- soft(params + step.size * gradient, thislambda*step.size)
-  } else if (thistype=="linear"){
+  } else if (thistype=="linear" | thistype=="intercept"){
     params.new <- soft(params + step.size * gradient, thislambda*step.size)
   } else if (thistype=="smooth"){
     perm <- order(data)
@@ -214,12 +220,14 @@ takeStep <- function(params, gradient, data, thistype, thislambda, step.size){
 
 ##### Model Fitting ##### 
 ## alphas in order (linear, smooth, categorical, text)
-hashFit <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, family=c("binomial","gaussian"), 
+hashFit <- function(dataprep.obj, params=NULL, y, family=c("binomial","gaussian"), 
                     lambda, alphas, thresh=1e-5, maxit=1e6, fixed=FALSE, step.size=1){
   datalist <- dataprep.obj[[1]] 
   datacount <- dataprep.obj[[2]]
+  types <- dataprep.obj[[3]]
+  n.mem.vec <- dataprep.obj[[4]]
   
-  lambda.dt <- data.table(type=c("linear","smooth","category","textfile", "textstring"), lam=lambda*c(alphas, alphas[4]))
+  lambda.dt <- data.table(type=c("intercept","linear","smooth","category","textfile", "textstring"), lam=lambda*c(0, alphas, alphas[4]))
   setkey(lambda.dt, type)
   
   p <- length(types)
@@ -280,3 +288,6 @@ warmstart <- function(dataprep.obj, types, params=NULL, y, n.mem.vec,
   }
   return(new.fit)
 }
+
+##### Cross Validation ##### 
+
