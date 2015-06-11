@@ -72,24 +72,35 @@ countText <- function(x, numMem){
 data.prep <- function(dataframe, types, n.mem.vec, tuples=FALSE, intercept=TRUE){
   p <- ncol(dataframe) 
   n <- nrow(dataframe)
-  out <- vector("list", (p+1))
-  counts <- vector("list", (p+1))
-  out[[1]] <- rep(1, n)
+  if(intercept==TRUE){
+    out <- vector("list", (p+1))
+    counts <- vector("list", (p+1))
+  } else {
+    out <- vector("list", (p))
+    counts <- vector("list", (p))
+  }
+ 
+  if(intercept==TRUE){out[[1]] <- rep(1, n)}
   for (i in c(1:p)){
     thistype <- types[i]
     if (thistype == "category"){
       this.out <- hashCategories(as.character(dataframe[,i]), n.mem.vec[i])
-      out[[i+1]] <- this.out[[1]]
-      counts[[i+1]] <- this.out[[2]]
+      out[[i+intercept]] <- this.out[[1]]
+      counts[[i+intercept]] <- this.out[[2]]
     } else if (thistype == "linear" | thistype == "smooth"){
-      out[[i+1]] <- scaleLinear(dataframe[,i])
+      out[[i+intercept]] <- scaleLinear(dataframe[,i])
     } else if (thistype == "textfile" | thistype == "textstring"){
-      out[[i+1]] <- sapply(dataframe[,i], FUN = function(x){hashText(as.character(x), thistype, n.mem.vec[i], tuples)})
-      counts[[i+1]] <- countText(out[[i+1]], n.mem.vec[i])
-    } else { (out[[i]] <- "Not a recognized type")}
+      out[[i+intercept]] <- sapply(dataframe[,i], FUN = function(x){hashText(as.character(x), thistype, n.mem.vec[i], tuples)})
+      counts[[i+intercept]] <- countText(out[[i+intercept]], n.mem.vec[i])
+    } else { (out[[i+intercept]] <- "Not a recognized type")}
   }
-  nMem <- c(NA, n.mem.vec)
-  type <- c("intercept",types)
+  if(intercept==TRUE){
+    type <- c("intercept",types)
+    nMem <- c(NA, n.mem.vec)
+  } else{ 
+    type <- types
+    nMem <- n.mem.vec
+  }
   return(list(out, counts, type, nMem))
 }
 
@@ -132,9 +143,9 @@ calcGradient <- function(data, mem, count, resids, thistype){
   if (thistype=="category"){
     gradient <- gradCat(data, mem, count, resids)
   } else if (thistype=="linear" | thistype=="intercept"){
-    gradient <- t(data) %*% resids 
+    gradient <- sum(data*resids) 
   } else if (thistype=="smooth"){
-    gradient <- resids 
+    gradient <- resids
   } else if (thistype=="textfile" | thistype=="textstring"){
     gradient <- gradText(data, mem, count, resids)
   } 
@@ -188,7 +199,7 @@ fitText = cxxfunction(signature(x='List', Beta='numeric', Count='int', Y='numeri
 fitFromParams <- function(thisbeta, thistype, thisX, count){
   zero <- rep(0, length(thisX))
   if (thistype=="category"){ fitted <- fitCat(thisX, thisbeta, count, zero)
-  } else if (thistype=="linear" | thistype=="intercept"){ fitted <- c(thisX) * thisbeta 
+  } else if (thistype=="linear" | thistype=="intercept"){ fitted <- thisX * thisbeta 
   } else if (thistype=="smooth"){ fitted <- thisbeta 
   } else if (thistype=="textfile" | thistype=="textstring"){
     fitted <- fitText(thisX, thisbeta, count, zero)
@@ -232,15 +243,20 @@ hashFit <- function(dataprep.obj, params=NULL, y, family=c("binomial","gaussian"
   
   p <- length(types)
   n <- length(y)
-  yhat <- rep(0, n)
+  
   eta <- matrix(0, nrow=n, ncol=p)
-  eta.new <- matrix(0, nrow=n, ncol=p)
   
   if(is.null(params)){
     params <- initialize.params(types, n.mem.vec, p, n)
-  } 
-  params.new <- initialize.params(types, n.mem.vec, p, n)
+  } else{
+    for(i in 1:p){
+      eta[,i] <- fitFromParams(params[[i]], types[i], datalist[[i]], datacount[[i]])
+    }
+  }
+  eta.new <- eta 
+  params.new <- params 
   if(length(step.size) != p){ step <- rep(step.size,p) } else{ step <- step.size }  
+  step[1] <- 1/n  ### change for logistic!! 
   ### note that if 1 < k < p step sizes are input, this will do some sort of weird vector-filling thing 
   
   count <- 0 
@@ -257,12 +273,14 @@ hashFit <- function(dataprep.obj, params=NULL, y, family=c("binomial","gaussian"
       eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
       yhat.new <- yhat - eta[,j] + eta.new[,j]
       if(fixed==FALSE){
-        while( 0.5*sum((y-yhat.new)^2) > (0.5*sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) + 
-                (1/(2*step[j])) * sum((params.new[[j]] - params[[j]])^2)) ){
-          step[j] <- step[j] * 0.8 
-          params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
-          eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
-          yhat.new <- yhat - eta[,j] + eta.new[,j]
+        if(this.type!="intercept"){
+          while( 0.5*sum((y-yhat.new)^2) > (0.5*sum((y-yhat)^2) - sum((params.new[[j]] - params[[j]])*this.grad) + 
+                                              (1/(2*step[j])) * sum((params.new[[j]] - params[[j]])^2)) ){
+            step[j] <- step[j] * 0.8 
+            params.new[[j]] <- takeStep(params[[j]], this.grad, datalist[[j]], this.type, lambda.dt[this.type]$lam, step[j])   ## Just update this variable's params
+            eta.new[,j] <- fitFromParams(params.new[[j]], this.type, datalist[[j]], datacount[[j]])
+            yhat.new <- yhat - eta[,j] + eta.new[,j]
+          }
         }
       }
       coef.change <- coef.change + sum(abs(params.new[[j]] - params[[j]]))
@@ -276,18 +294,87 @@ hashFit <- function(dataprep.obj, params=NULL, y, family=c("binomial","gaussian"
 }
 
 
-warmstart <- function(dataprep.obj, types, params=NULL, y, n.mem.vec, 
+warmstart <- function(dataprep.obj, params=NULL, y, 
                       family=c("binomial","gaussian"), minLam, maxLam, nLam, 
                       alphas, thresh=1e-5, maxit=1e6, fixed=FALSE, step.size=1){
+  fail <- c() 
   lambdas <- exp( seq(log(minLam), log(maxLam), length.out=nLam) )
-  oldbeta <- hashFit(dataprep.obj, types, params, y, n.mem.vec, family, maxLam, alphas, thresh, maxit, fixed, step.size)$betas
-  for(i in (length(lambdas)-1)){
-    new.fit <- hashFit(dataprep.obj, types, params=oldbeta, y, n.mem.vec, family, 
-                       rev(lambdas)[i+1], alphas, thresh=1e-5, maxit=1e6, fixed, step.size)
-    oldbeta <- new.fit$betas 
-  }
+  oldbeta <- hashFit(dataprep.obj, params, y, family, maxLam, alphas, thresh, maxit, fixed, step.size)$betas
+  for(i in (2:length(lambdas))) tryCatch( {
+    thislam = rev(lambdas)[i]
+    new.fit <- hashFit(dataprep.obj, params=oldbeta, y, family, 
+                       thislam, alphas, thresh=1e-5, maxit=1e6, fixed, step.size)
+    oldbeta <- new.fit$betas
+    }, error = function(e) fail <- c(fail, i) )
+  if(length(fail)>0){ print("Failed for ", fail) }
   return(new.fit)
 }
 
-##### Cross Validation ##### 
+##### Prediction ##### 
+predict <- function(dataprep.obj, fit.params){
+  datalist <- dataprep.obj[[1]] 
+  datacount <- dataprep.obj[[2]]
+  types <- dataprep.obj[[3]]
+  n.mem.vec <- dataprep.obj[[4]]
+  
+  n <- length(datalist[[1]])
+  zero <- rep(0, n)
+  sumfit <- rep(0, n)
+  
+  for(i in 1:length(types)){
+    thistype <- types[i]
+    thisX <- datalist[[i]] 
+    thisbeta <- fit.params[[i]] 
+    count <- datacount[[i]]
+    
+    if (thistype=="category"){ fitted <- fitCat(thisX, thisbeta, count, zero)
+    } else if (thistype=="linear" | thistype=="intercept"){ fitted <- thisX * thisbeta 
+    } else if (thistype=="smooth"){ fitted <- thisbeta 
+    } else if (thistype=="textfile" | thistype=="textstring"){
+      fitted <- fitText(thisX, thisbeta, count, zero)
+    }
+    sumfit <- sumfit + fitted 
+  }
+  return(sumfit)
+}
+
+traintest.prep <- function(dat, y, proptest, types, mem, tuples=F, intercept=T){
+  ntest <- floor(nrow(dat) * proptest)
+  which.test <- sample(nrow(dat), ntest)
+  which.train <- subset(c(1:nrow(dat)), !c(1:nrow(dat))%in%which.test)
+  
+  test.dat <- data.frame(dat[which.test,])
+  train.dat <- data.frame(dat[which.train,])
+  
+  test.y <- y[which.test]
+  train.y <- y[which.train] 
+  
+  test.obj <- data.prep(test.dat, types, mem, tuples=F, intercept=T)
+  train.obj <- data.prep(train.dat, types, mem, tuples=F, intercept=T)
+  
+  return(list(test.obj, test.y, train.obj, train.y))
+}
+
+predicterr <- function( test.obj, train.obj, test.y, train.y, lambdas, alphas, thresh=1e-5, maxit=1e5, fixed=F ){
+  test.dat <- test.obj[[1]] 
+  test.count <- test.obj[[2]]
+  test.types <- test.obj[[3]]
+  test.mem <- test.obj[[4]]
+
+  lambdas <- rev(sort(lambdas)) 
+    
+  hf <- hashFit(train.obj, params=NULL, train.y, family="gaussian", lambda=lambdas[1], alphas=alphas, thresh=thresh, maxit=maxit, fixed=fixed)
+  test.err <- predict(test.obj, hf$betas) - test.y
+  
+  if(length(lambdas)>1){
+    for(i in 2:length(lambdas)){
+      lam = lambdas[i]
+      hf <- hashFit(train.obj, params=hf$betas, train.y, family="gaussian", lambda=lam, alphas=alphas, thresh=thresh, maxit=maxit, fixed=fixed)
+      test.err <- cbind(test.err, predict(test.obj, hf$betas) - test.y )
+    }
+  }
+  return(test.err)
+}
+
+
 

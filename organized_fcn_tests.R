@@ -101,7 +101,7 @@ d <- data.frame(test.linear, test.smooth, test.cat, test.text)
 t <- c("linear","smooth","category","textfile")
 m <- c(NA,NA,500,2000)
 y <- y.linear + y.smooth + y.cat + y.text
-lam <- 1
+lam <- 1 ## 40 seconds for lambda = 1
 alph <- c(1,1,1,1)
 
 ## text, linear, smooth
@@ -146,14 +146,33 @@ d <- data.frame(test.linear, test.smooth, test.cat, test.text, test.linear2, tes
 t <- c("linear","smooth","category","textfile", "linear","category","smooth")
 m <- c(NA,NA,500,2000,NA,100,NA)
 y <- y.linear + y.smooth + y.cat + y.text + y.linear2 + y.cat2 + y.smooth2
-lam <- 3
+lam <- 5
 alph <- c(1,1,1,1)
 
 ##### Code for running each test ##### 
 hd <- data.prep(d, t, m, tuples=F)
-system.time(all.fit <- hashFit(hd, params=NULL, y, family="gaussian", lambda=lam, alphas=alph))
+system.time(all.fit <- hashFit(hd, params=NULL, y, family="gaussian", lambda=lam, alphas=alph, fixed=T, step.size=0.001))
 all.fit$step; all.fit$count
-plot(all.fit[[1]] ~ y)
+plot(all.fit$fitted ~ y)
+
+warm.fit <- warmstart(hd, params=NULL, y, family="gaussian", minLam=2, maxLam=200, nLam=20, alphas=alph, fixed=TRUE, step.size=0.001)
+plot(warm.fit$fitted ~ y)
 
 
 
+
+d <- data.frame(test.smooth, test.cat, test.text, test.cat2, test.smooth2)
+t <- c("smooth","category","textfile", "category","smooth")
+m <- c(NA,500,2000,100,NA)
+y <- y.smooth + y.cat + y.text + y.cat2 + y.smooth2
+lam <- 5
+alph <- c(1,1,1,1)
+
+##### Code for running each test ##### 
+hd <- data.prep(d, t, m, tuples=F, intercept=F)
+system.time(all.fit <- hashFit(hd, params=NULL, y, family="gaussian", lambda=lam, alphas=alph, fixed=F))
+all.fit$step; all.fit$count
+plot(all.fit$fitted ~ y)
+
+warm.fit <- warmstart(hd, params=NULL, y, family="gaussian", minLam=2, maxLam=200, nLam=20, alphas=alph, fixed=T, step.size=0.01)
+plot(warm.fit$fitted ~ y)

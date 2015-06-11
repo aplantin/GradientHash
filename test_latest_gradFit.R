@@ -190,9 +190,21 @@ y.smooth <- sin(test.smooth)
 err <- rnorm(100, 0, 1)
 
 ## Without error 
+## recall ordering of alphas: (linear, smooth, category, text)
 y <- y.cat + y.linear + y.smooth + y.txt
-all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=c(1,1,1,10), thresh=1e-5, maxit=1e7) 
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=5, alphas=c(1,1,0,10), thresh=1e-5, maxit=1e7) 
 plot(all.fit[[1]] ~ y)
+
+plot(y ~ test.linear, pch=16)
+points(all.fit[[1]] ~ test.linear, col="blue")
+
+## With error 
+y <- y.cat + y.linear + y.smooth + y.txt + err
+all.fit <- hashFit(hash.data, type, params=NULL, y, numMem, family="gaussian", lambda=1, alphas=c(1,1,0,10), thresh=1e-5, maxit=1e7) 
+plot(all.fit[[1]] ~ y)
+
+plot(y ~ test.linear, pch=16)
+points(all.fit[[1]] ~ test.linear, col="blue")
 
 
 ##### Testing cross-validation ##### 
